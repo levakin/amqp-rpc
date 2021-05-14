@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+option go_package = "github.com/levakin/amqp-rpc/rpc";
+
+message Request {
+  string service = 1;
+  string method = 2;
+}
