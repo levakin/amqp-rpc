@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/levakin/amqp-rpc/v0/examples/helloworld/proto"
-	"github.com/levakin/amqp-rpc/v0/rpc"
+	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
+	"github.com/levakin/amqp-rpc/rpc"
 )
 
 func main() {

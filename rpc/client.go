@@ -13,9 +13,9 @@ import (
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/levakin/amqp-rpc/v0/codes"
-	"github.com/levakin/amqp-rpc/v0/rabbitmq"
-	"github.com/levakin/amqp-rpc/v0/status"
+	"github.com/levakin/amqp-rpc/codes"
+	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/status"
 )
 
 const protobufContentType = "application/proto"

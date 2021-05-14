@@ -11,9 +11,9 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/streadway/amqp"
 
-	"github.com/levakin/amqp-rpc/v0/codes"
-	"github.com/levakin/amqp-rpc/v0/rabbitmq"
-	"github.com/levakin/amqp-rpc/v0/status"
+	"github.com/levakin/amqp-rpc/codes"
+	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/status"
 )
 
 // serviceInfo wraps information about a service. It is very similar to

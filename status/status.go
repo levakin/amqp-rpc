@@ -15,8 +15,8 @@ import (
 
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 
-	"github.com/levakin/amqp-rpc/v0/codes"
-	"github.com/levakin/amqp-rpc/v0/internal/status"
+	"github.com/levakin/amqp-rpc/codes"
+	"github.com/levakin/amqp-rpc/internal/status"
 )
 
 // Status references github.com/levakin/amqp-rpc/internal/status. It represents an

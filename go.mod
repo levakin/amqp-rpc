@@ -1,4 +1,4 @@
-module github.com/levakin/amqp-rpc/v0
+module github.com/levakin/amqp-rpc
 
 go 1.16
 

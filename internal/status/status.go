@@ -8,7 +8,7 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 
-	"github.com/levakin/amqp-rpc/v0/codes"
+	"github.com/levakin/amqp-rpc/codes"
 )
 
 // Status represents an RPC status code, message, and details.  It is immutable

@@ -8,9 +8,9 @@ package proto
 
 import (
 	context "context"
-	codes "github.com/levakin/amqp-rpc/v0/codes"
-	rpc "github.com/levakin/amqp-rpc/v0/rpc"
-	status "github.com/levakin/amqp-rpc/v0/status"
+	codes "github.com/levakin/amqp-rpc/codes"
+	rpc "github.com/levakin/amqp-rpc/rpc"
+	status "github.com/levakin/amqp-rpc/status"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 

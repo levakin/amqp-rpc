@@ -9,11 +9,11 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/levakin/amqp-rpc/v0/codes"
-	"github.com/levakin/amqp-rpc/v0/examples/helloworld/proto"
-	"github.com/levakin/amqp-rpc/v0/rabbitmq"
-	"github.com/levakin/amqp-rpc/v0/rpc"
-	"github.com/levakin/amqp-rpc/v0/status"
+	"github.com/levakin/amqp-rpc/codes"
+	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
+	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/rpc"
+	"github.com/levakin/amqp-rpc/status"
 )
 
 const (
