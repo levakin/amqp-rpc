@@ -11,6 +11,8 @@ import (
 
 	"github.com/levakin/amqp-rpc/codes"
 	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
+	"github.com/levakin/amqp-rpc/health"
+	"github.com/levakin/amqp-rpc/health/healthpb"
 	"github.com/levakin/amqp-rpc/rabbitmq"
 	"github.com/levakin/amqp-rpc/rpc"
 	"github.com/levakin/amqp-rpc/status"
@@ -158,6 +160,63 @@ func TestWantError(t *testing.T) {
 
 	if errMsg != dt.GetInfo() {
 		t.Errorf("want %s, got %s", errMsg, dt.GetInfo())
+	}
+}
+
+func TestHealthServer(t *testing.T) {
+	rpcServerQueueName := "rpc." + uuid.New().String()
+
+	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rpcServer.Close(); err != nil {
+			t.Error("error closing rpc server:", err)
+		}
+	}()
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+
+	proto.RegisterGreeterServer(rpcServer, &server{})
+	go func() {
+		if err := rpcServer.Serve(context.Background()); err != nil {
+			if err != rabbitmq.ErrClientIsNotAlive {
+				t.Error(err)
+			}
+			return
+		}
+	}()
+
+	healthpb.RegisterHealthServer(rpcServer, healthServer)
+
+	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rpcClient.Close(); err != nil {
+			t.Error("error closing rpc server:", err)
+		}
+	}()
+	go func() {
+		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
+			if err != rabbitmq.ErrClientIsNotAlive {
+				t.Error(err)
+			}
+			return
+		}
+	}()
+
+	hc := healthpb.NewHealthClient(rpcClient)
+
+	hcResp, err := hc.Check(context.Background(), &healthpb.HealthCheckRequest{Service: ""})
+	if err != nil {
+		t.Error(err)
+	}
+
+	if hcResp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+		t.Errorf("want %s got %s", healthpb.HealthCheckResponse_SERVING, hcResp.GetStatus())
 	}
 }
 
