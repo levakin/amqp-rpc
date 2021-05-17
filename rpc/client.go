@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/streadway/amqp"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
@@ -187,7 +187,7 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 	pc, ok := c.calls.get(d.CorrelationId)
 	if !ok {
 		if err := d.Nack(false, false); err != nil {
-			log.Printf("failed to nack message: %v\n", err)
+			log.Error().Err(err).Msg("failed to nack message")
 		}
 		return
 	}
@@ -195,7 +195,7 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 	stStr, ok := d.Headers["Amqp-Rpc-Status"].(string)
 	if !ok {
 		if err := d.Nack(false, false); err != nil {
-			log.Printf("failed to nack message: %v\n", err)
+			log.Error().Err(err).Msg("failed to nack message")
 		}
 		return
 	}
@@ -203,7 +203,7 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 	var code codes.Code
 	if err := json.Unmarshal([]byte(stStr), &code); err != nil {
 		if err := d.Nack(false, false); err != nil {
-			log.Printf("failed to nack message: %v\n", err)
+			log.Error().Err(err).Msg("failed to nack message")
 		}
 		return
 	}
@@ -213,7 +213,7 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 		if ok {
 			if err := proto.Unmarshal(sdb, &st); err != nil {
 				if err := d.Nack(false, false); err != nil {
-					log.Printf("failed to nack message: %v\n", err)
+					log.Error().Err(err).Msg("failed to nack message")
 				}
 				return
 			}
@@ -234,7 +234,7 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 	pc.done <- struct{}{}
 
 	if err := d.Ack(false); err != nil {
-		log.Printf("failed to ack message: %v\n", err)
+		log.Error().Err(err).Msg("failed to ack message")
 	}
 }
 
