@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"log"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ const (
 func TestSendRequest(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr)
+	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,14 +42,14 @@ func TestSendRequest(t *testing.T) {
 
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
 		}
 	}()
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout)
+	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestSendRequest(t *testing.T) {
 	}()
 	go func() {
 		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -85,7 +86,7 @@ func TestSendRequest(t *testing.T) {
 func TestWantError(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr)
+	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +100,14 @@ func TestWantError(t *testing.T) {
 
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
 		}
 	}()
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout)
+	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestWantError(t *testing.T) {
 	}()
 	go func() {
 		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -166,7 +167,7 @@ func TestWantError(t *testing.T) {
 func TestHealthServer(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr)
+	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func TestHealthServer(t *testing.T) {
 	proto.RegisterGreeterServer(rpcServer, &server{})
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -190,7 +191,7 @@ func TestHealthServer(t *testing.T) {
 
 	healthpb.RegisterHealthServer(rpcServer, healthServer)
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout)
+	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestHealthServer(t *testing.T) {
 	}()
 	go func() {
 		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return

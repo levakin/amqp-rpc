@@ -2,14 +2,15 @@ package rpc
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/streadway/amqp"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
 	"github.com/levakin/amqp-rpc/rabbitmq"
@@ -40,8 +41,8 @@ type Server struct {
 }
 
 // NewServer returns AMQP RPC server instance
-func NewServer(logger *log.Logger, queue, amqpAddr string) (*Server, error) {
-	pubRMQClient, err := rabbitmq.NewClient(amqpAddr)
+func NewServer(logger *log.Logger, queue, amqpAddr string, tlsCfg *tls.Config) (*Server, error) {
+	pubRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +55,7 @@ func NewServer(logger *log.Logger, queue, amqpAddr string) (*Server, error) {
 		logger:    logger,
 	}
 
-	conRMQClient, err := rabbitmq.NewClient(amqpAddr)
+	conRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
 	if err != nil {
 		return nil, err
 	}

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/levakin/amqp-rpc/codes"
 )
@@ -83,7 +83,7 @@ func (s *Status) WithDetails(details ...proto.Message) (*Status, error) {
 	// s.Code() != OK implies that s.Proto() != nil.
 	p := s.Proto()
 	for _, detail := range details {
-		any, err := ptypes.MarshalAny(detail)
+		any, err := anypb.New(detail)
 		if err != nil {
 			return nil, err
 		}
@@ -100,12 +100,15 @@ func (s *Status) Details() []interface{} {
 	}
 	details := make([]interface{}, 0, len(s.s.Details))
 	for _, any := range s.s.Details {
-		detail := &ptypes.DynamicAny{}
-		if err := ptypes.UnmarshalAny(any, detail); err != nil {
+		msg, err := any.UnmarshalNew()
+		if err != nil {
+			panic(err)
+		}
+		if err := any.UnmarshalTo(msg); err != nil {
 			details = append(details, err)
 			continue
 		}
-		details = append(details, detail.Message)
+		details = append(details, msg)
 	}
 	return details
 }

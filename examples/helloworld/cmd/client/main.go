@@ -17,7 +17,7 @@ func main() {
 }
 
 func run() error {
-	rpcClient, err := rpc.NewClient("amqp://guest:guest@localhost/", "rpc", time.Second*10)
+	rpcClient, err := rpc.NewClient("amqp://guest:guest@localhost/", "rpc", time.Second*10, nil)
 	if err != nil {
 		return err
 	}
