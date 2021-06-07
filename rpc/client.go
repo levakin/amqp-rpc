@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -76,13 +77,13 @@ type Client struct {
 }
 
 // NewClient creates a new Client
-func NewClient(amqpAddr, serverQueue string, callTimeout time.Duration) (*Client, error) {
-	pubRMQClient, err := rabbitmq.NewClient(amqpAddr)
+func NewClient(amqpAddr, serverQueue string, callTimeout time.Duration, tlsCfg *tls.Config) (*Client, error) {
+	pubRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	conRMQClient, err := rabbitmq.NewClient(amqpAddr)
+	conRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
 	if err != nil {
 		return nil, err
 	}

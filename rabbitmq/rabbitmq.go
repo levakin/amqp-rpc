@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -36,30 +37,30 @@ type Client struct {
 
 // NewClient is a constructor that takes address queue name, logger.
 // We create the client, and start the connection process.
-func NewClient(addr string) (*Client, error) {
+func NewClient(addr string, tlsCfg *tls.Config) (*Client, error) {
 	stopHandlingReconnect := make(chan struct{})
 	client := Client{
 		stopHandlingReconnect: stopHandlingReconnect,
 		alive:                 true,
 	}
 
-	if err := client.connect(addr); err != nil {
+	if err := client.connect(addr, tlsCfg); err != nil {
 		return nil, errors.Wrapf(err, "could not connect to amqp: %s", addr)
 	}
 
-	go client.handleReconnect(addr)
+	go client.handleReconnect(addr, tlsCfg)
 
 	return &client, nil
 }
 
 // handleReconnect will wait for a connection error on
 // notifyClose, and then continuously attempt to reconnect.
-func (c *Client) handleReconnect(addr string) {
+func (c *Client) handleReconnect(addr string, tlsCfg *tls.Config) {
 	for c.alive {
 		if !c.isConnected {
 			var retryCount int
 			for {
-				if err := c.connect(addr); err == nil {
+				if err := c.connect(addr, tlsCfg); err == nil {
 					// Connected to RabbitMQ successfully
 					// Stop retrying
 					break
@@ -89,8 +90,8 @@ func (c *Client) handleReconnect(addr string) {
 
 // connect will make a single attempt to connect to
 // RabbitMq. It returns the success of the attempt.
-func (c *Client) connect(addr string) error {
-	conn, err := amqp.Dial(addr)
+func (c *Client) connect(addr string, tlsCfg *tls.Config) error {
+	conn, err := amqp.DialTLS(addr, tlsCfg)
 	if err != nil {
 		return errors.Wrap(err, "failed to dial rabbitMQ server")
 	}
