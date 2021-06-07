@@ -70,7 +70,6 @@ type Client struct {
 	callTimeout       time.Duration
 	serverQueueName   string
 
-	mu    sync.Mutex
 	calls *calls
 
 	done chan struct{}

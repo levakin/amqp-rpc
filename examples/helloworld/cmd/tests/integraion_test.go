@@ -42,7 +42,7 @@ func TestSendRequest(t *testing.T) {
 
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -60,7 +60,7 @@ func TestSendRequest(t *testing.T) {
 	}()
 	go func() {
 		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -100,7 +100,7 @@ func TestWantError(t *testing.T) {
 
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -182,7 +182,7 @@ func TestHealthServer(t *testing.T) {
 	proto.RegisterGreeterServer(rpcServer, &server{})
 	go func() {
 		if err := rpcServer.Serve(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
@@ -202,7 +202,7 @@ func TestHealthServer(t *testing.T) {
 	}()
 	go func() {
 		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if err != rabbitmq.ErrClientIsNotAlive {
+			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
 				t.Error(err)
 			}
 			return
