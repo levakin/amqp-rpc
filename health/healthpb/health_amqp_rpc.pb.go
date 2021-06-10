@@ -65,7 +65,7 @@ type UnsafeHealthServer interface {
 }
 
 func RegisterHealthServer(s rpc.ServiceRegistrar, srv HealthServer) {
-	s.RegisterService(&Health_ServiceDesc, srv)
+	s.RegisterProtoService(&Health_ServiceDesc, srv)
 }
 
 func _Health_Check_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor rpc.UnaryServerInterceptor) (interface{}, error) {

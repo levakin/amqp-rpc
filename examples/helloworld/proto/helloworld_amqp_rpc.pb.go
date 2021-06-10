@@ -78,7 +78,7 @@ type UnsafeGreeterServer interface {
 }
 
 func RegisterGreeterServer(s rpc.ServiceRegistrar, srv GreeterServer) {
-	s.RegisterService(&Greeter_ServiceDesc, srv)
+	s.RegisterProtoService(&Greeter_ServiceDesc, srv)
 }
 
 func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor rpc.UnaryServerInterceptor) (interface{}, error) {
@@ -118,7 +118,7 @@ func _Greeter_ReturnErr_Handler(srv interface{}, ctx context.Context, dec func(i
 }
 
 // Greeter_ServiceDesc is the rpc.ServiceDesc for Greeter service.
-// It's only intended for direct use with rpc.RegisterService,
+// It's only intended for direct use with rpc.RegisterProtoService,
 // and not to be introspected or modified (even as a copy)
 var Greeter_ServiceDesc = rpc.ServiceDesc{
 	ServiceName: "helloworld.Greeter",

@@ -3,174 +3,83 @@ package rpc
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
+	"github.com/golang/protobuf/proto"
+	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
-	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/internal/rabbitmq"
 	"github.com/levakin/amqp-rpc/status"
 )
 
-// serviceInfo wraps information about a service. It is very similar to
-// ServiceDesc and is constructed from it for internal purposes.
-type serviceInfo struct {
-	// Contains the implementation for the methods in this service.
-	serviceImpl interface{}
-	methods     map[string]*MethodDesc
-	mdata       interface{}
+type rabbitMqServer struct {
+	consumer *rabbitmq.Consumer
+	producer *rabbitmq.Producer
+	services map[string]*ServiceInfo
+
+	started bool
+	mu      sync.Mutex
 }
 
-// Server implements ServiceRegistrar
-type Server struct {
-	publisher *rabbitmq.Publisher
-	consumer  *rabbitmq.Consumer
+func NewRabbitMqServer(connStr, queue string, connectionsCount, channelsPoolSize int, workers int, tlsCfg *tls.Config) (*rabbitMqServer, error) {
 
-	amqpAddr string
-	queue    string
-	serve    bool
-	services map[string]*serviceInfo // service name -> service info
-	logger   *log.Logger
+	consumerPool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "server_consumer_pool", tlsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
+	}
 
-	mu sync.Mutex
-}
-
-// NewServer returns AMQP RPC server instance
-func NewServer(logger *log.Logger, queue, amqpAddr string, tlsCfg *tls.Config) (*Server, error) {
-	pubRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
+	consumer, err := rabbitmq.NewConsumer(consumerPool, queue, workers, "server_consumer")
 	if err != nil {
 		return nil, err
 	}
 
-	s := Server{
-		publisher: rabbitmq.NewPublisher(pubRMQClient),
-		amqpAddr:  amqpAddr,
-		queue:     queue,
-		services:  make(map[string]*serviceInfo),
-		logger:    logger,
+	producerPool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "server_producer_pool", tlsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
 	}
 
-	conRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
+	producer, err := rabbitmq.NewProducer("callback_sender", producerPool)
 	if err != nil {
 		return nil, err
 	}
 
-	// Declare server queue
-	if _, err := conRMQClient.Channel.QueueDeclare(
-		queue,
-		false, // Durable
-		false, // Delete when unused
-		false, // Exclusive
-		false, // No-wait
-		nil,   // Arguments
-	); err != nil {
-		return nil, err
-	}
-
-	// TODO: implement worker pool pattern. Make consumer for each worker.
-	c := rabbitmq.NewConsumer(queue, conRMQClient, s.handleDelivery)
-	s.consumer = c
-
-	return &s, nil
+	return &rabbitMqServer{
+		consumer: consumer,
+		producer: producer,
+		services: make(map[string]*ServiceInfo),
+	}, nil
 }
 
-func (s *Server) Close() error {
-	if err := s.consumer.Close(); err != nil {
-		return err
-	}
-
-	if err := s.publisher.Close(); err != nil {
-		return err
-	}
-
-	return nil
+func (s *rabbitMqServer) Serve(ctx context.Context) error {
+	s.started = true
+	return s.consumer.Serve(ctx, rabbitmq.DeliveryHandlerFunc(s.handleDelivery))
 }
 
-// RegisterService registers a service to server
-func (s *Server) RegisterService(sd *ServiceDesc, impl interface{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.logger.Printf("RegisterService(%q)\n", sd.ServiceName)
-	if s.serve {
-		s.logger.Fatalf("amqp-rpc: Server.RegisterService after Server.Serve for %q\n", sd.ServiceName)
-	}
-
-	if _, ok := s.services[sd.ServiceName]; ok {
-		s.logger.Fatalf("amqp-rpc: Server.RegisterService found duplicate service registration for %q\n", sd.ServiceName)
-	}
-
-	info := &serviceInfo{
-		serviceImpl: impl,
-		methods:     make(map[string]*MethodDesc),
-		mdata:       sd.Metadata,
-	}
-
-	for i := range sd.Methods {
-		d := &sd.Methods[i]
-		info.methods[d.MethodName] = d
-	}
-	s.services[sd.ServiceName] = info
+func (s *rabbitMqServer) Close() error {
+	s.started = false
+	return s.consumer.Close()
 }
 
-// Serve starts the server
-func (s *Server) Serve(ctx context.Context) error {
-	s.serve = true
-
-	if err := s.consumer.Consume(ctx); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Server) handleDelivery(ctx context.Context, delivery amqp.Delivery) {
-	// TODO: decide if it is really needed to recover from panic
-	// defer func(m amqp.Delivery) {
-	// 	if err := recover(); err != nil {
-	// 		stack := make([]byte, 8096)
-	// 		stack = stack[:runtime.Stack(stack, false)]
-	// 		log.Printf("panic recovery for rabbitMQ message: %v: stack %v\n", err, stack)
-	//
-	// 		if err := delivery.Nack(false, false); err != nil {
-	// 			log.Printf("failed to nack message: %v\n", err)
-	// 		}
-	// 	}
-	// }(delivery)
-
-	if err := s.processUnaryRPC(ctx, delivery); err != nil {
-		fmt.Println("unhandled error during processing unary RPC:", err) // TODO: remove this
-		if err := delivery.Nack(false, false); err != nil {
-			log.Printf("failed to nack message: %v\n", err)
-		}
-		return
-	}
-
-	if err := delivery.Ack(false); err != nil {
-		log.Printf("failed to ack message: %v\n", err)
-	}
-}
-
-func (s *Server) processUnaryRPC(ctx context.Context, delivery amqp.Delivery) error {
+// should be sync to control the number of threads running as the same time
+func (s *rabbitMqServer) handleDelivery(ctx context.Context, delivery *amqp.Delivery) error {
 	fullMethod := delivery.Headers["fullMethod"].(string)
 	splittedMethod := strings.Split(fullMethod, "/")
 
 	reqService := splittedMethod[1]
 	reqMethod := splittedMethod[2]
 
-	si, ok := s.services[reqService]
+	serviceInfo, ok := s.services[reqService]
 	if !ok {
-		return errors.New("no such service: " + reqService)
+		return fmt.Errorf("no such service: " + reqService)
 	}
 
-	md, ok := si.methods[reqMethod]
+	methodDesc, ok := serviceInfo.Methods[reqMethod]
 	if !ok {
-		return errors.New("no such method: " + reqMethod)
+		return fmt.Errorf("no such methodDesc: " + reqMethod)
 	}
 
 	dec := func(i interface{}) error {
@@ -180,7 +89,16 @@ func (s *Server) processUnaryRPC(ctx context.Context, delivery amqp.Delivery) er
 		return nil
 	}
 
-	reply, appErr := md.Handler(si.serviceImpl, ctx, dec, nil)
+	pub := amqp.Publishing{
+		// Headers: amqp.Table{
+		//	"ttl": 100, // When reached 0 message should be deleted from the queue forever
+		// },
+		CorrelationId: delivery.CorrelationId,
+		ContentType:   ProtobufContentType,
+		DeliveryMode:  amqp.Persistent,
+	}
+
+	reply, appErr := methodDesc.Handler(serviceInfo.ServiceImpl, ctx, dec, nil)
 	if appErr != nil {
 		appStatus, ok := status.FromError(appErr)
 		if !ok {
@@ -189,26 +107,35 @@ func (s *Server) processUnaryRPC(ctx context.Context, delivery amqp.Delivery) er
 			appStatus, _ = status.FromError(appErr)
 		}
 
-		if err := s.sendStatus(ctx, delivery, appStatus); err != nil {
+		err := s.setStatus(&pub, appStatus)
+		if err != nil {
 			return err
 		}
+		return s.sendResponse(ctx, pub, "", delivery.ReplyTo)
 
-		return nil
-	}
+	} else {
 
-	replyData, err := proto.Marshal(reply.(proto.Message))
-	if err != nil {
-		return err
-	}
+		if delivery.ReplyTo != "" {
 
-	if err := s.sendResponse(ctx, delivery, replyData); err != nil {
-		return err
+			replyData, err := proto.Marshal(reply.(proto.Message))
+			if err != nil {
+				return err
+			}
+
+			pub.Body = replyData
+			pub.Headers = map[string]interface{}{
+				"Amqp-Rpc-Status": fmt.Sprintf("%d", codes.OK),
+			}
+
+			return s.sendResponse(ctx, pub, "", delivery.ReplyTo)
+		}
 	}
 
 	return nil
 }
 
-func (s *Server) sendStatus(ctx context.Context, delivery amqp.Delivery, st *status.Status) error {
+// setStatus sets status to publishing
+func (s *rabbitMqServer) setStatus(pub *amqp.Publishing, st *status.Status) error {
 	// Write status code
 	h := map[string]interface{}{
 		"Amqp-Rpc-Status": fmt.Sprintf("%d", st.Code()),
@@ -227,80 +154,42 @@ func (s *Server) sendStatus(ctx context.Context, delivery amqp.Delivery, st *sta
 		}
 		h["Amqp-Rpc-Status-Details-Bin"] = stBytes
 	}
-
-	if err := s.publisher.Publish(ctx, amqp.Publishing{
-		Headers:       h,
-		ContentType:   protobufContentType,
-		CorrelationId: delivery.CorrelationId,
-	}, delivery.ReplyTo); err != nil {
-		return err
-	}
+	pub.Headers = h
 
 	return nil
 }
 
-func (s *Server) sendResponse(ctx context.Context, delivery amqp.Delivery, replyData []byte) error {
-	if err := s.publisher.Publish(ctx, amqp.Publishing{
-		Headers: map[string]interface{}{
-			"Amqp-Rpc-Status": fmt.Sprintf("%d", codes.OK),
-		},
-		ContentType:   protobufContentType,
-		CorrelationId: delivery.CorrelationId,
-		Body:          replyData,
-	}, delivery.ReplyTo); err != nil {
-		return err
+func (s *rabbitMqServer) RegisterProtoService(serviceDesc *ServiceDesc, impl interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	log.Infof("amqp-rpc: registring proto service: %q", serviceDesc.ServiceName)
+	if s.started {
+		log.Fatalf("amqp-rpc: register proto service %q called after server started", serviceDesc.ServiceName)
 	}
 
-	return nil
+	if _, ok := s.services[serviceDesc.ServiceName]; ok {
+		log.Fatalf("amqp-rpc: found duplicate service registration for %q", serviceDesc.ServiceName)
+	}
+
+	methods := make(map[string]*MethodDesc)
+
+	for i := range serviceDesc.Methods {
+		methodDesc := &serviceDesc.Methods[i]
+		log.Debugf("registring method: %q for service %q", methodDesc.MethodName, serviceDesc.ServiceName)
+		methods[methodDesc.MethodName] = methodDesc
+	}
+
+	serviceInfo := &ServiceInfo{
+		ServiceImpl: impl,
+		Methods:     methods,
+		Metadata:    serviceDesc.Metadata,
+	}
+
+	s.services[serviceDesc.ServiceName] = serviceInfo
+	log.Debugf("%d methods registered for service %q", len(methods), serviceDesc.ServiceName)
 }
 
-// UnaryServerInfo consists of various information about a unary RPC on
-// server side. All per-rpc information may be mutated by the interceptor.
-type UnaryServerInfo struct {
-	// Server is the service implementation the user provides. This is read-only.
-	Server interface{}
-	// FullMethod is the full RPC method string, i.e., /package.service/method.
-	FullMethod string
-}
-
-// UnaryHandler defines the handler invoked by UnaryServerInterceptor to complete the normal
-// execution of a unary RPC. If a UnaryHandler returns an error, it should be produced by the
-// status package, or else RPC will use codes.Unknown as the status code and err.Error() as
-// the status message of the RPC.
-type UnaryHandler func(ctx context.Context, req interface{}) (interface{}, error)
-
-// UnaryServerInterceptor provides a hook to intercept the execution of a unary RPC on the server. info
-// contains all the information of this RPC the interceptor can operate on. And handler is the wrapper
-// of the service method implementation. It is the responsibility of the interceptor to invoke handler
-// to complete the RPC.
-type UnaryServerInterceptor func(ctx context.Context, req interface{}, info *UnaryServerInfo, handler UnaryHandler) (resp interface{}, err error)
-
-type methodHandler func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor UnaryServerInterceptor) (interface{}, error)
-
-// MethodDesc represents an RPC service's method specification.
-type MethodDesc struct {
-	MethodName string
-	Handler    methodHandler
-}
-
-// ServiceDesc represents an RPC service's specification.
-type ServiceDesc struct {
-	ServiceName string
-	// The pointer to the service interface. Used to check whether the user
-	// provided implementation satisfies the interface requirements.
-	HandlerType interface{}
-	Methods     []MethodDesc
-	Metadata    interface{}
-}
-
-// ServiceRegistrar wraps a single method that supports service registration. It
-// enables users to pass concrete types other than amqp-rpc.Server to the service
-// registration methods exported by the IDL generated code.
-type ServiceRegistrar interface {
-	// RegisterService registers a service and its implementation to the
-	// concrete type implementing this interface.  It may not be called
-	// once the server has started serving.
-	// desc describes the service and its methods and handlers. impl is the
-	// service implementation which is passed to the method handlers.
-	RegisterService(desc *ServiceDesc, impl interface{})
+func (s *rabbitMqServer) sendResponse(ctx context.Context, pub amqp.Publishing, exchange, routingKey string) error {
+	return s.producer.Publish(ctx, pub, exchange, routingKey)
 }

@@ -5,21 +5,17 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"github.com/streadway/amqp"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
-	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/internal/rabbitmq"
 	"github.com/levakin/amqp-rpc/status"
 )
-
-const protobufContentType = "application/proto"
 
 // ClientConnInterface defines the functions clients need to perform unary RPCs.
 // It is implemented by *ClientConn, and is only intended to be referenced by generated code.
@@ -29,113 +25,61 @@ type ClientConnInterface interface {
 	Invoke(ctx context.Context, method string, args interface{}, reply interface{}) error
 }
 
-type pendingCall struct {
-	st   *status.Status
-	done chan struct{}
-	data []byte
-}
-
-type calls struct {
-	mu  sync.Mutex
-	pcs map[string]pendingCall
-}
-
-func (c *calls) get(corrID string) (pendingCall, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	pc, ok := c.pcs[corrID]
-	return pc, ok
-}
-
-func (c *calls) set(corrID string, pc pendingCall) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.pcs[corrID] = pc
-}
-
-func (c *calls) delete(corrID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	delete(c.pcs, corrID)
-}
-
-// Client represents an RPC service's client
 type Client struct {
-	publisher         *rabbitmq.Publisher
 	consumer          *rabbitmq.Consumer
-	callbackQueueName string
+	producer          *rabbitmq.Producer
 	callTimeout       time.Duration
-	serverQueueName   string
-
-	calls *calls
-
-	done chan struct{}
+	callbackQueueName string
+	invokeQueueName   string
+	pendingCalls      *calls
+	waitReplies       bool
 }
 
-// NewClient creates a new Client
-func NewClient(amqpAddr, serverQueue string, callTimeout time.Duration, tlsCfg *tls.Config) (*Client, error) {
-	pubRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
+func NewClient(connStr, invokeQueueName string, connectionsCount, channelsPoolSize int, callbackWorkers int,
+	callTimeout time.Duration, waitReplies bool, tlsCfg *tls.Config) (*Client, error) {
+
+	pool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "client_pool", tlsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
+	}
+
+	producer, err := rabbitmq.NewProducer("client", pool)
 	if err != nil {
 		return nil, err
 	}
 
-	conRMQClient, err := rabbitmq.NewClient(amqpAddr, tlsCfg)
-	if err != nil {
-		return nil, err
+	var consumer *rabbitmq.Consumer
+	var callbackQueueName string
+
+	if waitReplies {
+		callbackQueueName = "rpc.callback." + uuid.New().String()
+		consumer, err = rabbitmq.NewConsumer(pool, callbackQueueName, callbackWorkers, "callback_consumer")
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	callbackQueueName := "rpc.callback." + uuid.New().String()
-
-	// Declare callback queue
-	if _, err := conRMQClient.Channel.QueueDeclare(
-		callbackQueueName,
-		false, // Durable
-		true,  // Delete when unused
-		false, // Exclusive
-		false, // No-wait
-		nil,   // Arguments
-	); err != nil {
-		return nil, err
-	}
-
-	c := &Client{
-		publisher:         rabbitmq.NewPublisher(pubRMQClient),
-		callbackQueueName: callbackQueueName,
-		serverQueueName:   serverQueue,
-		calls:             &calls{pcs: make(map[string]pendingCall)},
+	return &Client{
+		consumer:          consumer,
+		producer:          producer,
 		callTimeout:       callTimeout,
-		done:              make(chan struct{}, 1),
-	}
-	c.consumer = rabbitmq.NewConsumer(callbackQueueName, conRMQClient, c.handleCallbackFromServer)
-
-	return c, nil
+		callbackQueueName: callbackQueueName,
+		invokeQueueName:   invokeQueueName,
+		pendingCalls:      &calls{pcs: make(map[string]pendingCall)},
+		waitReplies:       waitReplies,
+	}, nil
 }
 
-func (c *Client) Close() error {
-	if err := c.consumer.Close(); err != nil {
-		return err
+// ServeCallbacks consumes callbacks from server
+func (c *Client) ServeCallbacks(ctx context.Context) error {
+	if !c.waitReplies {
+		return fmt.Errorf("cant start serve callbacks while waitReplies is false")
 	}
-
-	if err := c.publisher.Close(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.consumer.Serve(ctx, rabbitmq.DeliveryHandlerFunc(c.handleCallbackFromServer))
 }
 
-// HandleCallbacks consumes callbacks from server
-func (c *Client) HandleCallbacks(ctx context.Context) error {
-	return c.consumer.Consume(ctx)
-}
-
-var _ ClientConnInterface = (*Client)(nil)
-
-// Invoke ...
 func (c *Client) Invoke(ctx context.Context, method string, req interface{}, reply interface{}) error {
-	request, err := proto.Marshal(req.(proto.Message))
+	requestModel, err := proto.Marshal(req.(proto.Message))
 	if err != nil {
 		return err
 	}
@@ -145,81 +89,70 @@ func (c *Client) Invoke(ctx context.Context, method string, req interface{}, rep
 	pc := pendingCall{
 		done: make(chan struct{}, 1),
 	}
-	c.calls.set(corrID, pc)
-	defer c.calls.delete(corrID)
+	c.pendingCalls.set(corrID, pc)
+	defer c.pendingCalls.delete(corrID)
 
-	if err := c.publisher.Publish(
-		ctx,
-		amqp.Publishing{
-			Headers: map[string]interface{}{
-				"fullMethod": method,
-			},
-			ContentType:   protobufContentType,
-			CorrelationId: corrID,
-			ReplyTo:       c.callbackQueueName,
-			Body:          request,
-			Expiration:    fmt.Sprintf("%d", c.callTimeout),
+	pub := amqp.Publishing{
+		Headers: map[string]interface{}{
+			"fullMethod": method,
 		},
-		c.serverQueueName); err != nil {
-		return err
+		ContentType:   ProtobufContentType,
+		CorrelationId: corrID,
+		ReplyTo:       c.callbackQueueName,
+		Body:          requestModel,
+		Expiration:    fmt.Sprintf("%d", c.callTimeout),
 	}
 
-	select {
-	case <-pc.done:
-		pc, _ := c.calls.get(corrID)
+	if err := c.producer.Publish(ctx, pub, "", c.invokeQueueName); err != nil {
+		return err
+	}
+	if c.waitReplies {
+		select {
+		case <-pc.done:
+			pc, _ := c.pendingCalls.get(corrID)
 
-		if err := pc.st.Err(); err != nil {
-			return err
+			if err := pc.st.Err(); err != nil {
+				return err
+			}
+
+			if err := proto.Unmarshal(pc.data, reply.(proto.Message)); err != nil {
+				return err
+			}
+
+		case <-time.After(c.callTimeout):
+			return status.Error(codes.DeadlineExceeded, "call timeout exceeded")
 		}
-
-		if err := proto.Unmarshal(pc.data, reply.(proto.Message)); err != nil {
-			return err
-		}
-
-	case <-time.After(c.callTimeout):
-		return status.Error(codes.DeadlineExceeded, "call timeout exceeded")
 	}
 
 	return nil
 }
 
-func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
-	pc, ok := c.calls.get(d.CorrelationId)
+func (c *Client) handleCallbackFromServer(ctx context.Context, delivery *amqp.Delivery) error {
+	pc, ok := c.pendingCalls.get(delivery.CorrelationId)
 	if !ok {
-		if err := d.Nack(false, false); err != nil {
-			log.Error().Err(err).Msg("failed to nack message")
-		}
-		return
+		return fmt.Errorf("error getting pending call by correlation id")
 	}
 
-	stStr, ok := d.Headers["Amqp-Rpc-Status"].(string)
+	stStr, ok := delivery.Headers["Amqp-Rpc-Status"].(string)
 	if !ok {
-		if err := d.Nack(false, false); err != nil {
-			log.Error().Err(err).Msg("failed to nack message")
-		}
-		return
+		return fmt.Errorf("error read rpc reply message status")
 	}
 
 	var code codes.Code
 	if err := json.Unmarshal([]byte(stStr), &code); err != nil {
-		if err := d.Nack(false, false); err != nil {
-			log.Error().Err(err).Msg("failed to nack message")
-		}
-		return
+		return fmt.Errorf("error unmarshal rpc message callback status code")
 	}
 	if code != codes.OK {
 		st := spb.Status{Code: int32(code)}
-		sdb, ok := d.Headers["Amqp-Rpc-Status-Details-Bin"].([]byte)
+
+		sdb, ok := delivery.Headers["Amqp-Rpc-Status-Details-Bin"].([]byte)
 		if ok {
 			if err := proto.Unmarshal(sdb, &st); err != nil {
-				if err := d.Nack(false, false); err != nil {
-					log.Error().Err(err).Msg("failed to nack message")
-				}
-				return
+				return fmt.Errorf("error unmarshal status details")
 			}
 		}
 
-		msg, ok := d.Headers["Amqp-Rpc-Message"].(string)
+		msg, ok := delivery.Headers["Amqp-Rpc-Message"].(string)
 		if ok {
 			st.Message = msg
 		}
@@ -227,15 +160,17 @@ func (c *Client) handleCallbackFromServer(_ context.Context, d amqp.Delivery) {
 		pc.st = status.FromProto(&st)
 	}
 
-	pc.data = d.Body
+	pc.data = delivery.Body
 
-	c.calls.set(d.CorrelationId, pc)
+	c.pendingCalls.set(delivery.CorrelationId, pc)
 
 	pc.done <- struct{}{}
 
-	if err := d.Ack(false); err != nil {
-		log.Error().Err(err).Msg("failed to ack message")
-	}
+	return nil
+}
+
+func (c *Client) Close() error {
+	return c.consumer.Close()
 }
 
 func newCorrID() string {

@@ -2,33 +2,35 @@ package tests
 
 import (
 	"context"
-	"errors"
-	"log"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/levakin/amqp-rpc/codes"
 	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
 	"github.com/levakin/amqp-rpc/health"
 	"github.com/levakin/amqp-rpc/health/healthpb"
-	"github.com/levakin/amqp-rpc/rabbitmq"
+	"github.com/levakin/amqp-rpc/internal/logging"
 	"github.com/levakin/amqp-rpc/rpc"
 	"github.com/levakin/amqp-rpc/status"
 )
 
 const (
 	rpcTimeout = time.Second * 6
-	amqpAddr   = "amqp://guest:guest@localhost/"
+	amqpAddr   = "amqp://guest:guest@localhost:5672/"
 	errMsg     = "test error message"
 )
 
 func TestSendRequest(t *testing.T) {
+	logging.ConfigureLogger()
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
+	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,16 +42,24 @@ func TestSendRequest(t *testing.T) {
 
 	proto.RegisterGreeterServer(rpcServer, &server{})
 
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcServer.Serve(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
+		serverErrCh <- rpcServer.Serve(serveCtx)
 	}()
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
+	rpcClient, err := rpc.NewClient(
+		amqpAddr,
+		rpcServerQueueName,
+		1,
+		20,
+		1,
+		rpcTimeout,
+		true,
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,35 +68,43 @@ func TestSendRequest(t *testing.T) {
 			t.Error("error closing rpc server:", err)
 		}
 	}()
+
+	serveCallbacksErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
+		serveCallbacksErrCh <- rpcClient.ServeCallbacks(serveCtx)
 	}()
 
 	greeterClient := proto.NewGreeterClient(rpcClient)
 
 	name := "John Cena"
-	req := proto.HelloRequest{Name: name}
 	for i := 0; i < 10; i++ {
+		req := proto.HelloRequest{Name: fmt.Sprintf("%s_%d", name, i)}
 		resp, err := greeterClient.SayHello(context.Background(), &req)
 		if err != nil {
 			t.Error(err)
 		}
-		want := "hello " + name
+
+		want := fmt.Sprintf("hello %s_%d", name, i)
 		if resp.GetMessage() != want {
 			t.Error("want " + want + " got " + resp.GetMessage())
 		}
+		log.Infof("Want is: %s", want)
+	}
+
+	cancel()
+	if err := <-serveCallbacksErrCh; err != nil {
+		t.Errorf("err server callbacks: %v", err)
+	}
+
+	if err := <-serverErrCh; err != nil {
+		t.Errorf("err server: %v", err)
 	}
 }
 
 func TestWantError(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
+	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,16 +116,24 @@ func TestWantError(t *testing.T) {
 
 	proto.RegisterGreeterServer(rpcServer, &server{})
 
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcServer.Serve(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
+		serverErrCh <- rpcServer.Serve(serveCtx)
 	}()
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
+	rpcClient, err := rpc.NewClient(
+		amqpAddr,
+		rpcServerQueueName,
+		1,
+		20,
+		1,
+		rpcTimeout,
+		true,
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +142,9 @@ func TestWantError(t *testing.T) {
 			t.Error("error closing rpc server:", err)
 		}
 	}()
+	serveCallbacksErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
+		serveCallbacksErrCh <- rpcClient.ServeCallbacks(serveCtx)
 	}()
 
 	greeterClient := proto.NewGreeterClient(rpcClient)
@@ -162,12 +184,21 @@ func TestWantError(t *testing.T) {
 	if errMsg != dt.GetInfo() {
 		t.Errorf("want %s, got %s", errMsg, dt.GetInfo())
 	}
+
+	cancel()
+	if err := <-serveCallbacksErrCh; err != nil {
+		t.Errorf("err server callbacks: %v", err)
+	}
+
+	if err := <-serverErrCh; err != nil {
+		t.Errorf("err server: %v", err)
+	}
 }
 
 func TestHealthServer(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewServer(log.Default(), rpcServerQueueName, amqpAddr, nil)
+	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,18 +211,17 @@ func TestHealthServer(t *testing.T) {
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	proto.RegisterGreeterServer(rpcServer, &server{})
-	go func() {
-		if err := rpcServer.Serve(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
-	}()
-
 	healthpb.RegisterHealthServer(rpcServer, healthServer)
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, rpcTimeout, nil)
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- rpcServer.Serve(serveCtx)
+	}()
+
+	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, 1, 20, 1, rpcTimeout, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,13 +230,9 @@ func TestHealthServer(t *testing.T) {
 			t.Error("error closing rpc server:", err)
 		}
 	}()
+	serveCallbacksErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			if !errors.Is(err, rabbitmq.ErrClientIsNotAlive) {
-				t.Error(err)
-			}
-			return
-		}
+		serveCallbacksErrCh <- rpcClient.ServeCallbacks(serveCtx)
 	}()
 
 	hc := healthpb.NewHealthClient(rpcClient)
@@ -218,6 +244,15 @@ func TestHealthServer(t *testing.T) {
 
 	if hcResp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("want %s got %s", healthpb.HealthCheckResponse_SERVING, hcResp.GetStatus())
+	}
+
+	cancel()
+	if err := <-serveCallbacksErrCh; err != nil {
+		t.Errorf("err server callbacks: %v", err)
+	}
+
+	if err := <-serverErrCh; err != nil {
+		t.Errorf("err server: %v", err)
 	}
 }
 

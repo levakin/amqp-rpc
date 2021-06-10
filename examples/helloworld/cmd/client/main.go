@@ -17,7 +17,8 @@ func main() {
 }
 
 func run() error {
-	rpcClient, err := rpc.NewClient("amqp://guest:guest@localhost/", "rpc", time.Second*10, nil)
+	timeout := time.Second * 10
+	rpcClient, err := rpc.NewClient("amqp://guest:guest@localhost/", "rpc", 1, 20, 1, timeout, true, nil)
 	if err != nil {
 		return err
 	}
@@ -26,11 +27,15 @@ func run() error {
 			log.Println(err)
 		}
 	}()
+
+	serveCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveCallbacksErrCh := make(chan error, 1)
 	go func() {
-		if err := rpcClient.HandleCallbacks(context.Background()); err != nil {
-			log.Println(err)
-		}
+		serveCallbacksErrCh <- rpcClient.ServeCallbacks(serveCtx)
 	}()
+
 	greeterClient := proto.NewGreeterClient(rpcClient)
 	hr, err := greeterClient.SayHello(context.Background(), &proto.HelloRequest{
 		Name: "John Cena",
@@ -40,6 +45,11 @@ func run() error {
 	}
 
 	fmt.Println(hr.String())
+
+	cancel()
+	if err := <-serveCallbacksErrCh; err != nil {
+		return err
+	}
 
 	return nil
 }
