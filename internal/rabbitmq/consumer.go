@@ -10,6 +10,8 @@ import (
 	"github.com/streadway/amqp"
 )
 
+const reconnectDelay = time.Second * 5
+
 type Consumer struct {
 	pool    Pool
 	queue   string
@@ -43,10 +45,6 @@ func NewConsumer(pool Pool, queue string, workers int, name string) (*Consumer, 
 	}, nil
 }
 
-func (c *Consumer) Close() error {
-	return c.pool.Close()
-}
-
 type DeliveryHandlerFunc func(ctx context.Context, delivery *amqp.Delivery) error
 
 func (d DeliveryHandlerFunc) Handle(ctx context.Context, delivery *amqp.Delivery) error {
@@ -77,6 +75,12 @@ func (c *Consumer) Serve(ctx context.Context, handler DeliveryHandler) error {
 						log.Error().Stack().Err(err).Msgf("consumer %q: worker %d: got error", c.name, workerId)
 					}
 					log.Info().Msgf(`%q: restarting worker:"%d"...`, c.name, workerId)
+
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(reconnectDelay):
+					}
 				}
 			}
 		}(i)
