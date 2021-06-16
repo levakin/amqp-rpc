@@ -26,6 +26,7 @@ type ClientConnInterface interface {
 }
 
 type Client struct {
+	pool              rabbitmq.Pool
 	consumer          *rabbitmq.Consumer
 	producer          *rabbitmq.Producer
 	callTimeout       time.Duration
@@ -60,6 +61,7 @@ func NewClient(connStr, invokeQueueName string, connectionsCount, channelsPoolSi
 	}
 
 	return &Client{
+		pool:              pool,
 		consumer:          consumer,
 		producer:          producer,
 		callTimeout:       callTimeout,
@@ -170,7 +172,7 @@ func (c *Client) handleCallbackFromServer(ctx context.Context, delivery *amqp.De
 }
 
 func (c *Client) Close() error {
-	return c.consumer.Close()
+	return c.pool.Close()
 }
 
 func newCorrID() string {

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
 	"github.com/levakin/amqp-rpc/internal/rabbitmq"
@@ -17,16 +17,16 @@ import (
 )
 
 type rabbitMqServer struct {
-	consumer *rabbitmq.Consumer
-	producer *rabbitmq.Producer
-	services map[string]*ServiceInfo
+	producerPool, consumerPool rabbitmq.Pool
+	consumer                   *rabbitmq.Consumer
+	producer                   *rabbitmq.Producer
+	services                   map[string]*ServiceInfo
 
 	started bool
 	mu      sync.Mutex
 }
 
-func NewRabbitMqServer(connStr, queue string, connectionsCount, channelsPoolSize int, workers int, tlsCfg *tls.Config) (*rabbitMqServer, error) {
-
+func NewRabbitMQServer(connStr, queue string, connectionsCount, channelsPoolSize int, workers int, tlsCfg *tls.Config) (*rabbitMqServer, error) {
 	consumerPool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "server_consumer_pool", tlsCfg)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
@@ -48,9 +48,11 @@ func NewRabbitMqServer(connStr, queue string, connectionsCount, channelsPoolSize
 	}
 
 	return &rabbitMqServer{
-		consumer: consumer,
-		producer: producer,
-		services: make(map[string]*ServiceInfo),
+		producerPool: producerPool,
+		consumerPool: consumerPool,
+		consumer:     consumer,
+		producer:     producer,
+		services:     make(map[string]*ServiceInfo),
 	}, nil
 }
 
@@ -61,7 +63,10 @@ func (s *rabbitMqServer) Serve(ctx context.Context) error {
 
 func (s *rabbitMqServer) Close() error {
 	s.started = false
-	return s.consumer.Close()
+	if err := s.producerPool.Close(); err != nil {
+		return err
+	}
+	return s.consumerPool.Close()
 }
 
 // should be sync to control the number of threads running as the same time
