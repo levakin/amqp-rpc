@@ -30,7 +30,7 @@ func TestSendRequest(t *testing.T) {
 	logging.ConfigureLogger()
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 2, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestSendRequest(t *testing.T) {
 func TestWantError(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestWantError(t *testing.T) {
 func TestHealthServer(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMqServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,10 +17,6 @@ func NewProducer(name string, pool Pool) (*Producer, error) {
 	return &Producer{name: name, pool: pool}, nil
 }
 
-func (p *Producer) Close() error {
-	return p.pool.Close()
-}
-
 func (p *Producer) Publish(ctx context.Context, pub amqp.Publishing, exchange, key string) error {
 	log.Debug().Msgf("%q: publishing message to rabbitmq...", p.name)
 
