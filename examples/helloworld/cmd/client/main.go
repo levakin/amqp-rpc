@@ -18,7 +18,11 @@ func main() {
 
 func run() error {
 	timeout := time.Second * 10
-	rpcClient, err := rpc.NewClient("amqp://guest:guest@localhost/", "rpc", 1, 20, 1, timeout, true, nil)
+	rpcClient, err := rpc.NewClient(
+		"amqp://guest:guest@localhost/",
+		"rpc",
+		rpc.WithClientCallTimeout(timeout),
+	)
 	if err != nil {
 		return err
 	}

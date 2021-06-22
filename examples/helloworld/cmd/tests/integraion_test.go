@@ -21,16 +21,16 @@ import (
 )
 
 const (
-	rpcTimeout = time.Second * 6
-	amqpAddr   = "amqp://guest:guest@localhost:5672/"
-	errMsg     = "test error message"
+	rpcCallTimeout = time.Second * 6
+	amqpAddr       = "amqp://guest:guest@localhost:5672/"
+	errMsg         = "test error message"
 )
 
 func TestSendRequest(t *testing.T) {
 	logging.ConfigureLogger()
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 2, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +53,7 @@ func TestSendRequest(t *testing.T) {
 	rpcClient, err := rpc.NewClient(
 		amqpAddr,
 		rpcServerQueueName,
-		1,
-		20,
-		1,
-		rpcTimeout,
-		true,
-		nil,
+		rpc.WithClientCallTimeout(rpcCallTimeout),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +99,7 @@ func TestSendRequest(t *testing.T) {
 func TestWantError(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,12 +122,7 @@ func TestWantError(t *testing.T) {
 	rpcClient, err := rpc.NewClient(
 		amqpAddr,
 		rpcServerQueueName,
-		1,
-		20,
-		1,
-		rpcTimeout,
-		true,
-		nil,
+		rpc.WithClientCallTimeout(rpcCallTimeout),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +188,7 @@ func TestWantError(t *testing.T) {
 func TestHealthServer(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName, 1, 20, 1, nil)
+	rpcServer, err := rpc.NewRabbitMQServer(amqpAddr, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +211,11 @@ func TestHealthServer(t *testing.T) {
 		serverErrCh <- rpcServer.Serve(serveCtx)
 	}()
 
-	rpcClient, err := rpc.NewClient(amqpAddr, rpcServerQueueName, 1, 20, 1, rpcTimeout, true, nil)
+	rpcClient, err := rpc.NewClient(
+		amqpAddr,
+		rpcServerQueueName,
+		rpc.WithClientCallTimeout(rpcCallTimeout),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

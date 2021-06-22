@@ -16,7 +16,13 @@ import (
 	"github.com/levakin/amqp-rpc/status"
 )
 
-type rabbitMqServer struct {
+const (
+	DefaultServerConnectionsCount = 1
+	DefaultServerChannelsPoolSize = 20
+	DefaultServerWorkersCount     = 1
+)
+
+type RabbitMQServer struct {
 	producerPool, consumerPool rabbitmq.Pool
 	consumer                   *rabbitmq.Consumer
 	producer                   *rabbitmq.Producer
@@ -26,18 +32,58 @@ type rabbitMqServer struct {
 	mu      sync.Mutex
 }
 
-func NewRabbitMQServer(connStr, queue string, connectionsCount, channelsPoolSize int, workers int, tlsCfg *tls.Config) (*rabbitMqServer, error) {
-	consumerPool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "server_consumer_pool", tlsCfg)
+type ServerOptions struct {
+	ConnectionsCount int
+	ChannelsPoolSize int
+	WorkersCount     int
+	TLSCfg           *tls.Config
+}
+
+func WithServerConnectionsCount(n int) func(opts *ServerOptions) {
+	return func(opts *ServerOptions) {
+		opts.ConnectionsCount = n
+	}
+}
+
+func WithServerChannelsPoolSize(n int) func(opts *ServerOptions) {
+	return func(opts *ServerOptions) {
+		opts.ChannelsPoolSize = n
+	}
+}
+
+func WithServerWorkersCount(n int) func(opts *ServerOptions) {
+	return func(opts *ServerOptions) {
+		opts.WorkersCount = n
+	}
+}
+
+func WithServerTLSConfig(t *tls.Config) func(opts *ServerOptions) {
+	return func(opts *ServerOptions) {
+		opts.TLSCfg = t
+	}
+}
+
+func NewRabbitMQServer(connStr, queue string, options ...func(opts *ServerOptions)) (*RabbitMQServer, error) {
+	opts := ServerOptions{
+		ConnectionsCount: DefaultServerConnectionsCount,
+		ChannelsPoolSize: DefaultServerChannelsPoolSize,
+		WorkersCount:     DefaultServerWorkersCount,
+	}
+	for _, option := range options {
+		option(&opts)
+	}
+
+	consumerPool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "server_consumer_pool", opts.TLSCfg)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
 	}
 
-	consumer, err := rabbitmq.NewConsumer(consumerPool, queue, workers, "server_consumer")
+	consumer, err := rabbitmq.NewConsumer(consumerPool, queue, opts.WorkersCount, "server_consumer")
 	if err != nil {
 		return nil, err
 	}
 
-	producerPool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "server_producer_pool", tlsCfg)
+	producerPool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "server_producer_pool", opts.TLSCfg)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
 	}
@@ -47,7 +93,7 @@ func NewRabbitMQServer(connStr, queue string, connectionsCount, channelsPoolSize
 		return nil, err
 	}
 
-	return &rabbitMqServer{
+	return &RabbitMQServer{
 		producerPool: producerPool,
 		consumerPool: consumerPool,
 		consumer:     consumer,
@@ -56,12 +102,12 @@ func NewRabbitMQServer(connStr, queue string, connectionsCount, channelsPoolSize
 	}, nil
 }
 
-func (s *rabbitMqServer) Serve(ctx context.Context) error {
+func (s *RabbitMQServer) Serve(ctx context.Context) error {
 	s.started = true
 	return s.consumer.Serve(ctx, rabbitmq.DeliveryHandlerFunc(s.handleDelivery))
 }
 
-func (s *rabbitMqServer) Close() error {
+func (s *RabbitMQServer) Close() error {
 	s.started = false
 	if err := s.producerPool.Close(); err != nil {
 		return err
@@ -70,7 +116,7 @@ func (s *rabbitMqServer) Close() error {
 }
 
 // should be sync to control the number of threads running as the same time
-func (s *rabbitMqServer) handleDelivery(ctx context.Context, delivery *amqp.Delivery) error {
+func (s *RabbitMQServer) handleDelivery(ctx context.Context, delivery *amqp.Delivery) error {
 	fullMethod := delivery.Headers["fullMethod"].(string)
 	splittedMethod := strings.Split(fullMethod, "/")
 
@@ -95,9 +141,6 @@ func (s *rabbitMqServer) handleDelivery(ctx context.Context, delivery *amqp.Deli
 	}
 
 	pub := amqp.Publishing{
-		// Headers: amqp.Table{
-		//	"ttl": 100, // When reached 0 message should be deleted from the queue forever
-		// },
 		CorrelationId: delivery.CorrelationId,
 		ContentType:   ProtobufContentType,
 		DeliveryMode:  amqp.Persistent,
@@ -140,7 +183,7 @@ func (s *rabbitMqServer) handleDelivery(ctx context.Context, delivery *amqp.Deli
 }
 
 // setStatus sets status to publishing
-func (s *rabbitMqServer) setStatus(pub *amqp.Publishing, st *status.Status) error {
+func (s *RabbitMQServer) setStatus(pub *amqp.Publishing, st *status.Status) error {
 	// Write status code
 	h := map[string]interface{}{
 		"Amqp-Rpc-Status": fmt.Sprintf("%d", st.Code()),
@@ -164,7 +207,7 @@ func (s *rabbitMqServer) setStatus(pub *amqp.Publishing, st *status.Status) erro
 	return nil
 }
 
-func (s *rabbitMqServer) RegisterProtoService(serviceDesc *ServiceDesc, impl interface{}) {
+func (s *RabbitMQServer) RegisterProtoService(serviceDesc *ServiceDesc, impl interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -195,6 +238,6 @@ func (s *rabbitMqServer) RegisterProtoService(serviceDesc *ServiceDesc, impl int
 	log.Debugf("%d methods registered for service %q", len(methods), serviceDesc.ServiceName)
 }
 
-func (s *rabbitMqServer) sendResponse(ctx context.Context, pub amqp.Publishing, exchange, routingKey string) error {
+func (s *RabbitMQServer) sendResponse(ctx context.Context, pub amqp.Publishing, exchange, routingKey string) error {
 	return s.producer.Publish(ctx, pub, exchange, routingKey)
 }

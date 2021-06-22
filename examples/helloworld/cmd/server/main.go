@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	logging.ConfigureLogger()
-	rpcServer, err := rpc.NewRabbitMQServer("amqp://guest:guest@localhost:5672/", "rpc", 1, 20, 1, nil)
+	rpcServer, err := rpc.NewRabbitMQServer("amqp://guest:guest@localhost:5672/", "rpc")
 	if err != nil {
 		return err
 	}

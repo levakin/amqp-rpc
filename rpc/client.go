@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,12 @@ import (
 	"github.com/levakin/amqp-rpc/status"
 )
 
+const (
+	DefaultClientConnectionsCount = 1
+	DefaultClientChannelsPoolSize = 20
+	DefaultClientCallbackWorkers  = 1
+)
+
 // ClientConnInterface defines the functions clients need to perform unary RPCs.
 // It is implemented by *ClientConn, and is only intended to be referenced by generated code.
 type ClientConnInterface interface {
@@ -26,20 +33,81 @@ type ClientConnInterface interface {
 }
 
 type Client struct {
-	pool              rabbitmq.Pool
-	consumer          *rabbitmq.Consumer
-	producer          *rabbitmq.Producer
-	callTimeout       time.Duration
-	callbackQueueName string
-	invokeQueueName   string
-	pendingCalls      *calls
-	waitReplies       bool
+	pool                  rabbitmq.Pool
+	consumer              *rabbitmq.Consumer
+	producer              *rabbitmq.Producer
+	callMessageExpiration time.Duration
+	callTimeout           time.Duration
+	callbackQueueName     string
+	invokeQueueName       string
+	pendingCalls          *calls
+	waitReplies           bool
 }
 
-func NewClient(connStr, invokeQueueName string, connectionsCount, channelsPoolSize int, callbackWorkers int,
-	callTimeout time.Duration, waitReplies bool, tlsCfg *tls.Config) (*Client, error) {
+type ClientOptions struct {
+	ConnectionsCount      int
+	ChannelsPoolSize      int
+	CallbackWorkers       int
+	WaitReplies           bool
+	CallMessageExpiration time.Duration
+	CallTimeout           time.Duration
+	TLSCfg                *tls.Config
+}
 
-	pool, err := rabbitmq.NewPool(connStr, connectionsCount, channelsPoolSize, "client_pool", tlsCfg)
+func WithClientConnectionsCount(n int) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.ConnectionsCount = n
+	}
+}
+
+func WithClientChannelsPoolSize(n int) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.ChannelsPoolSize = n
+	}
+}
+
+func WithClientCallbackWorkers(n int) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.CallbackWorkers = n
+	}
+}
+
+func WithClientCallMessageExpiration(t time.Duration) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.CallMessageExpiration = t
+	}
+}
+
+func WithClientCallTimeout(t time.Duration) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.CallTimeout = t
+	}
+}
+
+func WithClientWaitReplies(t bool) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.WaitReplies = t
+	}
+}
+
+func WithClientTLSConfig(t *tls.Config) func(opts *ClientOptions) {
+	return func(opts *ClientOptions) {
+		opts.TLSCfg = t
+	}
+}
+
+func NewClient(connStr, invokeQueueName string, options ...func(opts *ClientOptions)) (*Client, error) {
+	opts := ClientOptions{
+		ConnectionsCount: DefaultClientConnectionsCount,
+		ChannelsPoolSize: DefaultClientChannelsPoolSize,
+		CallbackWorkers:  DefaultClientCallbackWorkers,
+		WaitReplies:      true,
+	}
+	for _, option := range options {
+		option(&opts)
+	}
+
+	pool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "client_pool", opts.TLSCfg)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
 	}
@@ -52,23 +120,24 @@ func NewClient(connStr, invokeQueueName string, connectionsCount, channelsPoolSi
 	var consumer *rabbitmq.Consumer
 	var callbackQueueName string
 
-	if waitReplies {
+	if opts.WaitReplies {
 		callbackQueueName = "rpc.callback." + uuid.New().String()
-		consumer, err = rabbitmq.NewConsumer(pool, callbackQueueName, callbackWorkers, "callback_consumer")
+		consumer, err = rabbitmq.NewConsumer(pool, callbackQueueName, opts.CallbackWorkers, "callback_consumer")
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return &Client{
-		pool:              pool,
-		consumer:          consumer,
-		producer:          producer,
-		callTimeout:       callTimeout,
-		callbackQueueName: callbackQueueName,
-		invokeQueueName:   invokeQueueName,
-		pendingCalls:      &calls{pcs: make(map[string]pendingCall)},
-		waitReplies:       waitReplies,
+		pool:                  pool,
+		consumer:              consumer,
+		producer:              producer,
+		callMessageExpiration: opts.CallMessageExpiration,
+		callTimeout:           opts.CallTimeout,
+		callbackQueueName:     callbackQueueName,
+		invokeQueueName:       invokeQueueName,
+		pendingCalls:          &calls{pcs: make(map[string]pendingCall)},
+		waitReplies:           opts.WaitReplies,
 	}, nil
 }
 
@@ -81,6 +150,12 @@ func (c *Client) ServeCallbacks(ctx context.Context) error {
 }
 
 func (c *Client) Invoke(ctx context.Context, method string, req interface{}, reply interface{}) error {
+	if c.callTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.callTimeout)
+		defer cancel()
+	}
+
 	requestModel, err := proto.Marshal(req.(proto.Message))
 	if err != nil {
 		return err
@@ -94,6 +169,11 @@ func (c *Client) Invoke(ctx context.Context, method string, req interface{}, rep
 	c.pendingCalls.set(corrID, pc)
 	defer c.pendingCalls.delete(corrID)
 
+	var expiration string
+	if c.callMessageExpiration > 0 {
+		expiration = strconv.FormatInt(c.callMessageExpiration.Milliseconds(), 10)
+	}
+
 	pub := amqp.Publishing{
 		Headers: map[string]interface{}{
 			"fullMethod": method,
@@ -102,7 +182,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req interface{}, rep
 		CorrelationId: corrID,
 		ReplyTo:       c.callbackQueueName,
 		Body:          requestModel,
-		Expiration:    fmt.Sprintf("%d", c.callTimeout),
+		Expiration:    expiration,
 	}
 
 	if err := c.producer.Publish(ctx, pub, "", c.invokeQueueName); err != nil {
@@ -121,7 +201,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req interface{}, rep
 				return err
 			}
 
-		case <-time.After(c.callTimeout):
+		case <-ctx.Done():
 			return status.Error(codes.DeadlineExceeded, "call timeout exceeded")
 		}
 	}
@@ -129,7 +209,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req interface{}, rep
 	return nil
 }
 
-func (c *Client) handleCallbackFromServer(ctx context.Context, delivery *amqp.Delivery) error {
+func (c *Client) handleCallbackFromServer(_ context.Context, delivery *amqp.Delivery) error {
 	pc, ok := c.pendingCalls.get(delivery.CorrelationId)
 	if !ok {
 		return fmt.Errorf("error getting pending call by correlation id")
