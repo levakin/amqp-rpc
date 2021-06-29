@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,103 +15,57 @@ import (
 	"github.com/levakin/amqp-rpc/status"
 )
 
-const (
-	DefaultServerConnectionsCount = 1
-	DefaultServerChannelsPoolSize = 20
-	DefaultServerWorkersCount     = 1
-)
+const DefaultServerWorkersCount = 1
 
 type RabbitMQServer struct {
-	producerPool, consumerPool rabbitmq.Pool
-	consumer                   *rabbitmq.Consumer
-	producer                   *rabbitmq.Producer
-	services                   map[string]*ServiceInfo
+	pool     rabbitmq.Pool
+	consumer *rabbitmq.Consumer
+	producer *rabbitmq.Producer
+	services map[string]*ServiceInfo
 
 	started bool
 	mu      sync.Mutex
 }
 
-type ServerOptions struct {
-	ConnectionsCount int
-	ChannelsPoolSize int
-	WorkersCount     int
-	TLSCfg           *tls.Config
+type serverOptions struct {
+	workersCount int
 }
 
-func WithServerConnectionsCount(n int) func(opts *ServerOptions) {
-	return func(opts *ServerOptions) {
-		opts.ConnectionsCount = n
+func WithServerWorkersCount(n int) func(opts *serverOptions) {
+	return func(opts *serverOptions) {
+		opts.workersCount = n
 	}
 }
 
-func WithServerChannelsPoolSize(n int) func(opts *ServerOptions) {
-	return func(opts *ServerOptions) {
-		opts.ChannelsPoolSize = n
-	}
-}
-
-func WithServerWorkersCount(n int) func(opts *ServerOptions) {
-	return func(opts *ServerOptions) {
-		opts.WorkersCount = n
-	}
-}
-
-func WithServerTLSConfig(t *tls.Config) func(opts *ServerOptions) {
-	return func(opts *ServerOptions) {
-		opts.TLSCfg = t
-	}
-}
-
-func NewRabbitMQServer(connStr, queue string, options ...func(opts *ServerOptions)) (*RabbitMQServer, error) {
-	opts := ServerOptions{
-		ConnectionsCount: DefaultServerConnectionsCount,
-		ChannelsPoolSize: DefaultServerChannelsPoolSize,
-		WorkersCount:     DefaultServerWorkersCount,
+func NewRabbitMQServer(pool rabbitmq.Pool, queue string, options ...func(opts *serverOptions)) (*RabbitMQServer, error) {
+	opts := serverOptions{
+		workersCount: DefaultServerWorkersCount,
 	}
 	for _, option := range options {
 		option(&opts)
 	}
 
-	consumerPool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "server_consumer_pool", opts.TLSCfg)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
-	}
-
-	consumer, err := rabbitmq.NewConsumer(consumerPool, queue, opts.WorkersCount, "server_consumer")
+	consumer, err := rabbitmq.NewConsumer(pool, queue, opts.workersCount, "server_consumer")
 	if err != nil {
 		return nil, err
 	}
 
-	producerPool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "server_producer_pool", opts.TLSCfg)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
-	}
-
-	producer, err := rabbitmq.NewProducer("callback_sender", producerPool)
+	producer, err := rabbitmq.NewProducer("callback_sender", pool)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RabbitMQServer{
-		producerPool: producerPool,
-		consumerPool: consumerPool,
-		consumer:     consumer,
-		producer:     producer,
-		services:     make(map[string]*ServiceInfo),
+		pool:     pool,
+		consumer: consumer,
+		producer: producer,
+		services: make(map[string]*ServiceInfo),
 	}, nil
 }
 
 func (s *RabbitMQServer) Serve(ctx context.Context) error {
 	s.started = true
 	return s.consumer.Serve(ctx, rabbitmq.DeliveryHandlerFunc(s.handleDelivery))
-}
-
-func (s *RabbitMQServer) Close() error {
-	s.started = false
-	if err := s.producerPool.Close(); err != nil {
-		return err
-	}
-	return s.consumerPool.Close()
 }
 
 // should be sync to control the number of threads running as the same time

@@ -11,6 +11,7 @@ import (
 
 	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
 	"github.com/levakin/amqp-rpc/internal/logging"
+	"github.com/levakin/amqp-rpc/internal/rabbitmq"
 	"github.com/levakin/amqp-rpc/rpc"
 )
 
@@ -22,15 +23,22 @@ func main() {
 
 func run() error {
 	logging.ConfigureLogger()
-	rpcServer, err := rpc.NewRabbitMQServer("amqp://guest:guest@localhost:5672/", "rpc")
+
+	pool, err := rabbitmq.NewPool("amqp://guest:guest@localhost:5672/", 1, 20, "pool", nil)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to init RabbitMQ pool")
 	}
+
 	defer func() {
-		if err := rpcServer.Close(); err != nil {
+		if err := pool.Close(); err != nil {
 			log.Errorln(err)
 		}
 	}()
+
+	rpcServer, err := rpc.NewRabbitMQServer(pool, "rpc")
+	if err != nil {
+		return err
+	}
 
 	proto.RegisterGreeterServer(rpcServer, &server{})
 

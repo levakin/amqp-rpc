@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -18,11 +17,7 @@ import (
 	"github.com/levakin/amqp-rpc/status"
 )
 
-const (
-	DefaultClientConnectionsCount = 1
-	DefaultClientChannelsPoolSize = 20
-	DefaultClientCallbackWorkers  = 1
-)
+const DefaultClientCallbackWorkers = 1
 
 // ClientConnInterface defines the functions clients need to perform unary RPCs.
 // It is implemented by *ClientConn, and is only intended to be referenced by generated code.
@@ -45,25 +40,10 @@ type Client struct {
 }
 
 type ClientOptions struct {
-	ConnectionsCount      int
-	ChannelsPoolSize      int
 	CallbackWorkers       int
 	WaitReplies           bool
 	CallMessageExpiration time.Duration
 	CallTimeout           time.Duration
-	TLSCfg                *tls.Config
-}
-
-func WithClientConnectionsCount(n int) func(opts *ClientOptions) {
-	return func(opts *ClientOptions) {
-		opts.ConnectionsCount = n
-	}
-}
-
-func WithClientChannelsPoolSize(n int) func(opts *ClientOptions) {
-	return func(opts *ClientOptions) {
-		opts.ChannelsPoolSize = n
-	}
 }
 
 func WithClientCallbackWorkers(n int) func(opts *ClientOptions) {
@@ -90,26 +70,13 @@ func WithClientWaitReplies(t bool) func(opts *ClientOptions) {
 	}
 }
 
-func WithClientTLSConfig(t *tls.Config) func(opts *ClientOptions) {
-	return func(opts *ClientOptions) {
-		opts.TLSCfg = t
-	}
-}
-
-func NewClient(connStr, invokeQueueName string, options ...func(opts *ClientOptions)) (*Client, error) {
+func NewClient(pool rabbitmq.Pool, invokeQueueName string, options ...func(opts *ClientOptions)) (*Client, error) {
 	opts := ClientOptions{
-		ConnectionsCount: DefaultClientConnectionsCount,
-		ChannelsPoolSize: DefaultClientChannelsPoolSize,
-		CallbackWorkers:  DefaultClientCallbackWorkers,
-		WaitReplies:      true,
+		CallbackWorkers: DefaultClientCallbackWorkers,
+		WaitReplies:     true,
 	}
 	for _, option := range options {
 		option(&opts)
-	}
-
-	pool, err := rabbitmq.NewPool(connStr, opts.ConnectionsCount, opts.ChannelsPoolSize, "client_pool", opts.TLSCfg)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to rabbitmq server. Conn string: %s", connStr)
 	}
 
 	producer, err := rabbitmq.NewProducer("client", pool)
@@ -249,10 +216,6 @@ func (c *Client) handleCallbackFromServer(_ context.Context, delivery *amqp.Deli
 	pc.done <- struct{}{}
 
 	return nil
-}
-
-func (c *Client) Close() error {
-	return c.pool.Close()
 }
 
 func newCorrID() string {
