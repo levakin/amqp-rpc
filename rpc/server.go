@@ -27,18 +27,18 @@ type RabbitMQServer struct {
 	mu      sync.Mutex
 }
 
-type serverOptions struct {
+type ServerOptions struct {
 	workersCount int
 }
 
-func WithServerWorkersCount(n int) func(opts *serverOptions) {
-	return func(opts *serverOptions) {
+func WithServerWorkersCount(n int) func(opts *ServerOptions) {
+	return func(opts *ServerOptions) {
 		opts.workersCount = n
 	}
 }
 
-func NewRabbitMQServer(pool rabbitmq.Pool, queue string, options ...func(opts *serverOptions)) (*RabbitMQServer, error) {
-	opts := serverOptions{
+func NewRabbitMQServer(pool rabbitmq.Pool, queue string, options ...func(opts *ServerOptions)) (*RabbitMQServer, error) {
+	opts := ServerOptions{
 		workersCount: DefaultServerWorkersCount,
 	}
 	for _, option := range options {
