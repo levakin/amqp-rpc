@@ -10,10 +10,10 @@ import (
 
 type Producer struct {
 	name string
-	pool Pool
+	pool Pooler
 }
 
-func NewProducer(name string, pool Pool) (*Producer, error) {
+func NewProducer(name string, pool Pooler) (*Producer, error) {
 	return &Producer{name: name, pool: pool}, nil
 }
 

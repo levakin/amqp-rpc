@@ -9,7 +9,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/levakin/amqp-rpc/examples/helloworld/proto"
-	"github.com/levakin/amqp-rpc/internal/rabbitmq"
+	"github.com/levakin/amqp-rpc/rabbitmq"
 	"github.com/levakin/amqp-rpc/rpc"
 )
 
@@ -22,19 +22,31 @@ func main() {
 func run() error {
 	timeout := time.Second * 10
 
-	pool, err := rabbitmq.NewPool("amqp://guest:guest@localhost:5672/", 1, 20, "pool", nil)
+	producerPool, err := rabbitmq.NewPool("amqp://guest:guest@localhost:5672/", "producer_pool")
 	if err != nil {
 		return errors.Wrap(err, "failed to init RabbitMQ pool")
 	}
 
 	defer func() {
-		if err := pool.Close(); err != nil {
+		if err := producerPool.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	consumerPool, err := rabbitmq.NewPool("amqp://guest:guest@localhost:5672/", "consumer_pool")
+	if err != nil {
+		return errors.Wrap(err, "failed to init RabbitMQ pool")
+	}
+
+	defer func() {
+		if err := consumerPool.Close(); err != nil {
 			log.Println(err)
 		}
 	}()
 
 	rpcClient, err := rpc.NewClient(
-		pool,
+		producerPool,
+		consumerPool,
 		"rpc",
 		rpc.WithClientCallTimeout(timeout),
 	)

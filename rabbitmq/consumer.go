@@ -13,13 +13,13 @@ import (
 const reconnectDelay = time.Second * 5
 
 type Consumer struct {
-	pool    Pool
+	pool    Pooler
 	queue   string
 	workers int
 	name    string
 }
 
-func NewConsumer(pool Pool, queue string, workers int, name string) (*Consumer, error) {
+func NewConsumer(pool Pooler, queue string, workers int, name string) (*Consumer, error) {
 	ch, err := pool.GetAMQPChan()
 	if err != nil {
 		return nil, err

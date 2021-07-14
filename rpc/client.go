@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
-	"github.com/levakin/amqp-rpc/internal/rabbitmq"
+	"github.com/levakin/amqp-rpc/rabbitmq"
 	"github.com/levakin/amqp-rpc/status"
 )
 
@@ -28,7 +28,6 @@ type ClientConnInterface interface {
 }
 
 type Client struct {
-	pool                  rabbitmq.Pool
 	consumer              *rabbitmq.Consumer
 	producer              *rabbitmq.Producer
 	callMessageExpiration time.Duration
@@ -70,7 +69,7 @@ func WithClientWaitReplies(t bool) func(opts *ClientOptions) {
 	}
 }
 
-func NewClient(pool rabbitmq.Pool, invokeQueueName string, options ...func(opts *ClientOptions)) (*Client, error) {
+func NewClient(producerPool, consumerPool rabbitmq.Pooler, invokeQueueName string, options ...func(opts *ClientOptions)) (*Client, error) {
 	opts := ClientOptions{
 		CallbackWorkers: DefaultClientCallbackWorkers,
 		WaitReplies:     true,
@@ -79,7 +78,7 @@ func NewClient(pool rabbitmq.Pool, invokeQueueName string, options ...func(opts 
 		option(&opts)
 	}
 
-	producer, err := rabbitmq.NewProducer("client", pool)
+	producer, err := rabbitmq.NewProducer("client", producerPool)
 	if err != nil {
 		return nil, err
 	}
@@ -89,14 +88,13 @@ func NewClient(pool rabbitmq.Pool, invokeQueueName string, options ...func(opts 
 
 	if opts.WaitReplies {
 		callbackQueueName = "rpc.callback." + uuid.New().String()
-		consumer, err = rabbitmq.NewConsumer(pool, callbackQueueName, opts.CallbackWorkers, "callback_consumer")
+		consumer, err = rabbitmq.NewConsumer(consumerPool, callbackQueueName, opts.CallbackWorkers, "callback_consumer")
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return &Client{
-		pool:                  pool,
 		consumer:              consumer,
 		producer:              producer,
 		callMessageExpiration: opts.CallMessageExpiration,

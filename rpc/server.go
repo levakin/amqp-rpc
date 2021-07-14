@@ -11,14 +11,14 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/levakin/amqp-rpc/codes"
-	"github.com/levakin/amqp-rpc/internal/rabbitmq"
+	"github.com/levakin/amqp-rpc/rabbitmq"
 	"github.com/levakin/amqp-rpc/status"
 )
 
 const DefaultServerWorkersCount = 1
 
 type RabbitMQServer struct {
-	pool     rabbitmq.Pool
+	pool     rabbitmq.Pooler
 	consumer *rabbitmq.Consumer
 	producer *rabbitmq.Producer
 	services map[string]*ServiceInfo
@@ -37,7 +37,7 @@ func WithServerWorkersCount(n int) func(opts *ServerOptions) {
 	}
 }
 
-func NewRabbitMQServer(pool rabbitmq.Pool, queue string, options ...func(opts *ServerOptions)) (*RabbitMQServer, error) {
+func NewRabbitMQServer(producerPool, consumerPool rabbitmq.Pooler, queue string, options ...func(opts *ServerOptions)) (*RabbitMQServer, error) {
 	opts := ServerOptions{
 		workersCount: DefaultServerWorkersCount,
 	}
@@ -45,18 +45,18 @@ func NewRabbitMQServer(pool rabbitmq.Pool, queue string, options ...func(opts *S
 		option(&opts)
 	}
 
-	consumer, err := rabbitmq.NewConsumer(pool, queue, opts.workersCount, "server_consumer")
+	consumer, err := rabbitmq.NewConsumer(consumerPool, queue, opts.workersCount, "server_consumer")
 	if err != nil {
 		return nil, err
 	}
 
-	producer, err := rabbitmq.NewProducer("callback_sender", pool)
+	producer, err := rabbitmq.NewProducer("callback_sender", producerPool)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RabbitMQServer{
-		pool:     pool,
+		pool:     producerPool,
 		consumer: consumer,
 		producer: producer,
 		services: make(map[string]*ServiceInfo),
@@ -112,24 +112,20 @@ func (s *RabbitMQServer) handleDelivery(ctx context.Context, delivery *amqp.Deli
 		if err != nil {
 			return err
 		}
+
 		return s.sendResponse(ctx, pub, "", delivery.ReplyTo)
-
-	} else {
-
-		if delivery.ReplyTo != "" {
-
-			replyData, err := proto.Marshal(reply.(proto.Message))
-			if err != nil {
-				return err
-			}
-
-			pub.Body = replyData
-			pub.Headers = map[string]interface{}{
-				"Amqp-Rpc-Status": fmt.Sprintf("%d", codes.OK),
-			}
-
-			return s.sendResponse(ctx, pub, "", delivery.ReplyTo)
+	} else if delivery.ReplyTo != "" {
+		replyData, err := proto.Marshal(reply.(proto.Message))
+		if err != nil {
+			return err
 		}
+
+		pub.Body = replyData
+		pub.Headers = map[string]interface{}{
+			"Amqp-Rpc-Status": fmt.Sprintf("%d", codes.OK),
+		}
+
+		return s.sendResponse(ctx, pub, "", delivery.ReplyTo)
 	}
 
 	return nil

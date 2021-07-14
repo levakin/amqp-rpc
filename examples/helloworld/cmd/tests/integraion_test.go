@@ -16,7 +16,7 @@ import (
 	"github.com/levakin/amqp-rpc/health"
 	"github.com/levakin/amqp-rpc/health/healthpb"
 	"github.com/levakin/amqp-rpc/internal/logging"
-	"github.com/levakin/amqp-rpc/internal/rabbitmq"
+	"github.com/levakin/amqp-rpc/rabbitmq"
 	"github.com/levakin/amqp-rpc/rpc"
 	"github.com/levakin/amqp-rpc/status"
 )
@@ -30,19 +30,31 @@ const (
 func TestSendRequest(t *testing.T) {
 	logging.ConfigureLogger()
 
-	pool, err := rabbitmq.NewPool(amqpAddr, 1, 20, "pool", nil)
+	producerPool, err := rabbitmq.NewPool(amqpAddr, "producer_pool")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	defer func() {
-		if err := pool.Close(); err != nil {
-			t.Error("error closing RabbitMQ pool:", err)
+		if err := producerPool.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	consumerPool, err := rabbitmq.NewPool(amqpAddr, "consumer_pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if err := consumerPool.Close(); err != nil {
+			log.Println(err)
 		}
 	}()
 
 	rpcServerQueueName := "rpc." + uuid.New().String()
-	rpcServer, err := rpc.NewRabbitMQServer(pool, rpcServerQueueName)
+
+	rpcServer, err := rpc.NewRabbitMQServer(producerPool, consumerPool, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +70,8 @@ func TestSendRequest(t *testing.T) {
 	}()
 
 	rpcClient, err := rpc.NewClient(
-		pool,
+		producerPool,
+		consumerPool,
 		rpcServerQueueName,
 		rpc.WithClientCallTimeout(rpcCallTimeout),
 	)
@@ -89,6 +102,7 @@ func TestSendRequest(t *testing.T) {
 	}
 
 	cancel()
+
 	if err := <-serveCallbacksErrCh; err != nil {
 		t.Errorf("err server callbacks: %v", err)
 	}
@@ -99,20 +113,31 @@ func TestSendRequest(t *testing.T) {
 }
 
 func TestWantError(t *testing.T) {
-	pool, err := rabbitmq.NewPool(amqpAddr, 1, 20, "pool", nil)
+	producerPool, err := rabbitmq.NewPool(amqpAddr, "producer_pool")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	defer func() {
-		if err := pool.Close(); err != nil {
-			t.Error("error closing RabbitMQ pool:", err)
+		if err := producerPool.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	consumerPool, err := rabbitmq.NewPool(amqpAddr, "consumer_pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if err := consumerPool.Close(); err != nil {
+			log.Println(err)
 		}
 	}()
 
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	rpcServer, err := rpc.NewRabbitMQServer(pool, rpcServerQueueName)
+	rpcServer, err := rpc.NewRabbitMQServer(producerPool, consumerPool, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +153,8 @@ func TestWantError(t *testing.T) {
 	}()
 
 	rpcClient, err := rpc.NewClient(
-		pool,
+		producerPool,
+		consumerPool,
 		rpcServerQueueName,
 		rpc.WithClientCallTimeout(rpcCallTimeout),
 	)
@@ -192,18 +218,29 @@ func TestWantError(t *testing.T) {
 func TestHealthServer(t *testing.T) {
 	rpcServerQueueName := "rpc." + uuid.New().String()
 
-	pool, err := rabbitmq.NewPool(amqpAddr, 1, 20, "pool", nil)
+	producerPool, err := rabbitmq.NewPool(amqpAddr, "producer_pool")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	defer func() {
-		if err := pool.Close(); err != nil {
-			t.Error("error closing RabbitMQ pool:", err)
+		if err := producerPool.Close(); err != nil {
+			log.Println(err)
 		}
 	}()
 
-	rpcServer, err := rpc.NewRabbitMQServer(pool, rpcServerQueueName)
+	consumerPool, err := rabbitmq.NewPool(amqpAddr, "consumer_pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if err := consumerPool.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	rpcServer, err := rpc.NewRabbitMQServer(producerPool, consumerPool, rpcServerQueueName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +259,8 @@ func TestHealthServer(t *testing.T) {
 	}()
 
 	rpcClient, err := rpc.NewClient(
-		pool,
+		producerPool,
+		consumerPool,
 		rpcServerQueueName,
 		rpc.WithClientCallTimeout(rpcCallTimeout),
 	)
